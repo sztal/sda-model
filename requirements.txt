@@ -1,0 +1,9 @@
+matplotlib==3.0.3
+scipy==1.2.1
+tqdm==4.29.0
+numpy==1.15.4
+pandas==0.24.2
+numba==0.43.0
+networkx==2.3
+python_igraph==0.7.1.post6
+scikit_learn==0.21.2

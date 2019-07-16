@@ -1,0 +1,14 @@
+paper/**
+paper-jasss/**
+raw-data/**
+data/**
+**/figures
+**/__pycache__
+**/.cache
+**/.vscode
+**/.Rhistory
+**/.Rproj.user
+**/*.Rproj
+**/*.pdf
+**/*.zip
+.Rproj.user

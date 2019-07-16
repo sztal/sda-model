@@ -1,0 +1,568 @@
+---
+title: "Homophily as a process generating social networks"
+description: "R code of the analysis."
+author:
+  - name: Szymon Talaga 
+    url: https://github.com/sztal
+    affiliation: The Robert Zajonc Institute for Social Studies, University of Warsaw
+    affiliation_url: https://iss.uw.edu.pl
+date: "`r Sys.Date()`"
+output: pdf_document
+---
+
+```{r setup_markdown, include=FALSE}
+PACKAGES <- c("here", "Cairo")
+for (p in PACKAGES) {
+    if (!(p %in% installed.packages())) {
+        install.packages(p)
+    }
+}
+knitr::opts_chunk$set(
+    echo = FALSE,
+    message = FALSE,
+    warning = FALSE,
+    fig.width = 8,
+    fig.asp = 0.618,
+    base.dir = here::here(),
+    root.dir = here::here(),
+    fig.path = "figures/",
+    dev = "CairoPS",
+    dev.args = list(
+        family = "sans"
+    ),
+    cache.path = ".cache/knitr/"
+)
+```
+
+
+```{r setup}
+library(magrittr)
+library(boot)
+library(tidyverse)
+library(feather)
+library(emmeans)
+library(broom)
+library(ggsignif)
+library(ggpubr)
+library(gridExtra)
+
+
+# Setup ggplot aesthetics
+theme_set(theme_bw(
+    # base_family = "sans",
+    base_size = 13
+))
+
+# Globals
+HERE <- here::here()
+ROOT <- file.path(HERE, "..")
+DATA <- file.path(ROOT, "data")
+
+source(file.path(HERE, "functions.R"))
+
+SIZES <- c(1000, 2000, 4000, 8000)
+ALPHA_COLORS <- c("#5780e0", "#7db717", "#d37e00", "#d80000")
+ALPHA_LABELS <- c("2", "4", "8", bquote("\U221E"))
+LEGEND_TR <- c(.834, .945)
+LEGEND_TL <- c(.163, .945)
+
+# Set random seed
+set.seed(1010)
+```
+
+# SDA model simulations
+
+```{r sda_get_data}
+sda <- read_feather(file.path(DATA, "sda-data.feather")) %>%
+    mutate(
+        degseq = map(degseq, ~as.integer(str_split(.x, pattern = fixed("|"))[[1]])),
+        space = space %>% fct_recode(
+            Uniform = "uniform",
+            `Log-normal` = "lognormal",
+            `Gaussian clusters` = "clusters_normal"
+        ) %>% fct_relevel("Uniform", "Gaussian clusters", "Log-normal"),
+        alpha_f = factor(alpha, levels = c(2, 4, 8, Inf)),
+        m_f = factor(str_c("m = ", m), levels = c("m = 1", "m = 2", "m = 4", "m = 8", "m = 16")),
+        p_rewire_f = if_else(p_rewire == 0, "No rewiring", "Random rewiring") %>%
+            factor(levels = c("No rewiring", "Random rewiring")),
+        density = k_avg / (N - 1),
+        clustering_c = clustering - density,
+        alpha_n = if_else(is.finite(alpha), alpha, 100)
+    )
+```
+
+## Clustering
+
+```{r sda_clustering, fig.width = 8, fig.asp = 0.618}
+gdf <- sda %>%
+    group_by(space, N, m_f, alpha_f) %>%
+    summarize(
+        stat = mean(clustering),
+        lower = simple_boot(clustering, min),
+        upper = simple_boot(clustering, max),
+        n = n()
+    ) %>%
+    ungroup
+
+gdf %>%
+    make_line_plot(LEGEND_TR) +
+    facet_grid(space ~ m_f) +
+    scale_y_continuous(limits = c(0, 1)) +
+    ylab("Clustering")
+```
+
+## Degree assortativity
+
+```{r sda_assortativity}
+gdf <- sda %>%
+    group_by(space, N, m_f, alpha_f) %>%
+    summarize(
+        stat = mean(assortativity),
+        lower = simple_boot(assortativity, min),
+        upper = simple_boot(assortativity, max),
+        n = n()
+    ) %>%
+    ungroup
+
+gdf %>%
+    make_line_plot(LEGEND_TR, hline = 0) +
+    facet_grid(space ~ m_f) +
+    scale_y_continuous(limits = c(-.2, 1), breaks = c(0, .25, .5, .75, 1)) +
+    ylab("Degree assortativity")
+```
+
+## Average path lengths (small-world)
+
+```{r sda_average_path_lengths}
+sda %>%
+    group_by(p_rewire, m_f, alpha_f, space) %>%
+    summarize(
+        r = cor(average_path_length, log(N), method = "pearson")
+    ) %>%
+    ungroup %>%
+    split(.$p_rewire) %>%
+    map(summary)
+
+gdf <- sda %>%
+    group_by(p_rewire_f, N, m_f, alpha_f) %>%
+    summarize(
+        stat = mean(average_path_length),
+        lower = simple_boot(average_path_length, min),
+        upper = simple_boot(average_path_length, max),
+        n = n()
+    ) %>%
+    ungroup
+
+gdf %>%
+    make_line_plot(LEGEND_TR) +
+    facet_grid(p_rewire_f ~ m_f, scales = "free_y") +
+    ylab("Average path length")
+
+gdf %>%
+    filter(p_rewire_f == "No rewiring") %>%
+    make_line_plot("top") +
+    facet_wrap(~m_f, scales = "free_y") +
+    ylab("Average path length")
+```
+
+```{r sda_average_path_length_correlations}
+Q <- sda %>%
+    group_by(space, m, alpha, p_rewire) %>%
+    summarize(
+        L_cor = cor(average_path_length, log(N))
+    )
+small_world <- tapply(Q$L_cor, Q$p_rewire, summary)
+```
+
+## Skewness
+
+```{r sda_skewness, fig.width = 8, fig.asp = .618}
+gdf <- sda %>%
+    group_by(space, N, m_f, alpha_f) %>%
+    summarize(
+        stat = mean(deg_skew),
+        lower = simple_boot(deg_skew, min),
+        upper = simple_boot(deg_skew, max),
+        n = n()
+    ) %>%
+    ungroup
+
+gdf %>%
+    make_line_plot(LEGEND_TL, hline = 0) +
+    facet_grid(space ~ m_f) +
+    ylab("Degree distribution skewness")
+```
+
+## Kurtosis
+
+```{r sda_kurtosis}
+gdf <- sda %>%
+    group_by(space, N, m_f, alpha_f) %>%
+    summarize(
+        stat = mean(deg_kurt),
+        lower = simple_boot(deg_kurt, min),
+        upper = simple_boot(deg_kurt, max),
+        n = n()
+    ) %>%
+    ungroup
+
+gdf %>%
+    make_line_plot(LEGEND_TL, hline = 0) +
+    facet_grid(space ~ m_f) +
+    ylab("Degree distribution kurtosis")
+```
+
+## Statistical models
+
+### Statistical model for clustering
+
+```{r sda_models_clustering}
+cl_lm <- lm(logit(clustering) ~ space + log(N) + log(m) + log(alpha_n), data = sda)
+summary(cl_lm)
+cl_emm <- emmeans(cl_lm, ~space, type = "response")
+cl_cnt <- contrast(cl_emm, method = "consec") %>% tidy
+cl_plt <- (cl_emm %>%
+    tidy %>%
+    ggplot(aes(x = space, y = response, color = space)) +
+    geom_errorbar(aes(ymin = conf.low, ymax = conf.high), width = .25) +
+    geom_point(shape = 16, size = 3) +
+    geom_signif(
+        color = "black",
+        annotations = "< 0.001", 
+        xmin = 1, 
+        xmax = 2,
+        y_position = .35,
+        tip_length = c(1, .25)
+    ) +
+    geom_signif(
+        color = "black",
+        annotations = "< 0.001",
+        xmin = 2,
+        xmax = 3,
+        y_position = .35,
+        tip_length = c(0, .2)
+    ) +
+    scale_color_manual(values = ALPHA_COLORS) +
+    scale_y_continuous(limits = c(0, .4)) +
+    theme(
+        axis.text.x = element_text(size = 9)
+    ) +
+    guides(color = FALSE)) %>%
+    add_base_theme +
+    xlab("") +
+    ylab("Clustering")
+```
+
+### Statistical model for assortativity
+
+```{r sda_models_assortativity}
+as_lm <- lm(atanh(assortativity) ~ space + log(N) + log(m) + log(alpha_n), data = sda)
+summary(as_lm)
+as_emm <- emmeans(as_lm, ~space)
+as_cnt <- contrast(as_emm, method = "consec") %>% tidy
+as_plt <- (as_emm %>%
+    tidy %>%
+    mutate_at(vars(estimate, conf.low, conf.high), tanh) %>%
+    ggplot(aes(x = space, y = estimate, color = space)) +
+    geom_errorbar(aes(ymin = conf.low, ymax = conf.high), width = .25) +
+    geom_point(shape = 16, size = 3) +
+    geom_signif(
+        color = "black",
+        annotations = "< 0.001", 
+        xmin = 1, 
+        xmax = 2,
+        y_position = .6,
+        tip_length = c(.55, .1)
+    ) +
+    geom_signif(
+        color = "black",
+        annotations = "< 0.001",
+        xmin = 2,
+        xmax = 3,
+        y_position = .8,
+        tip_length = c(.5, .15)
+    ) +
+    scale_color_manual(values = ALPHA_COLORS) +
+    scale_y_continuous(limits = c(0, 1)) +
+    theme(
+        axis.text.x = element_text(size = 9)
+    ) +
+    guides(color = FALSE)) %>%
+    add_base_theme +
+    xlab("") +
+    ylab("Degree assortativity")
+```
+
+### Model-based differences between types of social space
+
+```{r sda_models_plot, fig.width = 8}
+grid.arrange(cl_plt, as_plt, ncol = 2)
+```
+
+# SDA configuration model simulation results
+
+```{r sdc_get_data}
+sdc <- read_feather(file.path(DATA, "sda-data-cm.feather")) %>%
+    mutate(
+        degseq = map(degseq, ~as.integer(str_split(.x, pattern = fixed("|"))[[1]])),
+        space = space %>% fct_recode(
+            Uniform = "uniform",
+            `Log-normal` = "lognormal",
+            `Gaussian clusters` = "clusters_normal"
+        ) %>% fct_relevel("Uniform", "Gaussian clusters", "Log-normal"),
+        alpha_f = factor(alpha, levels = c(2, 4, 8, Inf)),
+        m_f = factor(str_c("m = ", m), levels = c("m = 1", "m = 2", "m = 4", "m = 8", "m = 16")),
+        p_rewire_f = if_else(p_rewire == 0, "No rewiring", "Random rewiring") %>%
+            factor(levels = c("No rewiring", "Random rewiring")),
+        density = k_avg / (N - 1),
+        clustering_c = clustering - density,
+        degseq_type = factor(degseq_type) %>% fct_recode(
+            Poisson = "poisson",
+            `Negative binomial` = "negbinom",
+                `Power-law` ="powerlaw"
+        ) %>% fct_relevel("Poisson", "Negative binomial", "Power-law"),
+        alpha_n = if_else(is.finite(alpha), alpha, 100)
+    )
+```
+
+## Clustering
+
+```{r sdc_clustering, fig.width = 8, fig.asp = 0.618}
+gdf <- sdc %>%
+    group_by(degseq_type, N, m_f, alpha_f) %>%
+    summarize(
+        stat = mean(clustering),
+        lower = simple_boot(clustering, min),
+        upper = simple_boot(clustering, max),
+        n = n()
+    ) %>%
+    ungroup
+
+gdf %>%
+    make_line_plot(legend_position = LEGEND_TR) +
+    facet_grid(degseq_type ~ m_f) +
+    scale_y_continuous(limits = c(0, 1)) +
+    ylab("Clustering")
+```
+
+## Degree assortativity
+
+```{r sdc_assortativity}
+gdf <- sdc %>%
+    group_by(degseq_type, N, m_f, alpha_f) %>%
+    summarize(
+        stat = mean(assortativity),
+        lower = simple_boot(assortativity, min),
+        upper = simple_boot(assortativity, max),
+        n = n()
+    ) %>%
+    ungroup
+
+gdf %>%
+    make_line_plot(legend_position = LEGEND_TR, hline = 0) +
+    facet_grid(degseq_type ~ m_f) +
+    scale_y_continuous(limits = c(-.2, 1), breaks = c(0, .25, .5, .75, 1)) +
+    ylab("Degree assortativity")
+```
+
+## Average path lengths (small-world)
+
+```{r sdc_average_path_lengths}
+sdc %>%
+    group_by(p_rewire, m_f, alpha_f, space, degseq_type, degseq_sort) %>%
+    summarize(
+        r = cor(average_path_length, log(N), method = "pearson")
+    ) %>%
+    ungroup %>%
+    split(.$p_rewire) %>%
+    map(summary)
+
+gdf <- sdc %>%
+    group_by(degseq_type, N, m_f, alpha_f) %>%
+    summarize(
+        stat = mean(average_path_length),
+        lower = simple_boot(average_path_length, min),
+        upper = simple_boot(average_path_length, max),
+        n = n()
+    ) %>%
+    ungroup
+
+gdf %>%
+    make_line_plot(LEGEND_TR) +
+    facet_grid(degseq_type ~ m_f, scales = "free_y") +
+    ylab("Average path length")
+```
+
+## SDA-SDC comparison
+
+```{r sda_sdc_comparison, fig.width = 8, fig.height = 5}
+df1 <- sda %>%
+    select(space, N, m, alpha_f, clustering, assortativity) %>%
+    group_by(space, N, m, alpha_f) %>%
+    summarize(
+        clustering = list(clustering),
+        assortativity = list(assortativity)
+    ) %>%
+    ungroup
+df2 <- sdc %>%
+    select(degseq_type, space, N, m, alpha_f, clustering, assortativity) %>%
+    group_by(degseq_type, space, N, m, alpha_f) %>%
+    summarize(
+        clustering = list(clustering),
+        assortativity = list(assortativity)
+    ) %>%
+    ungroup
+
+df <- left_join(df1, df2, by = c("space", "N", "m", "alpha_f"), suffix = c("", "_cm")) %>%
+    mutate(
+        clustering = map2(clustering, clustering_cm, ~list(.x, .y)),
+        assortativity = map2(assortativity, assortativity_cm, ~list(.x, .y))
+    ) %>%
+    mutate(
+        cl_comparison = map(clustering, ~{
+            data.frame(
+                cl_delta = median(.x[[1]]) - median(.x[[2]]),
+                cl_p_val = wilcox.test(.x[[1]], .x[[2]], exact = FALSE)$p.value
+            )
+        }),
+        as_comparison = map(assortativity, ~{
+            data.frame(
+                as_delta = median(.x[[1]] - median(.x[[2]])),
+                as_p_val = wilcox.test(.x[[1]], .x[[2]], exact = FALSE)$p.value
+            )
+        })
+    ) %>%
+    select(-clustering, -clustering_cm, -assortativity, -assortativity_cm) %>%
+    unnest(cl_comparison, as_comparison) %>%
+    mutate_at(vars(cl_p_val, as_p_val), p.adjust, method = "BY")
+
+plt1 <- (df %>%
+    mutate(cl_delta = if_else(cl_p_val > 0.01, 0, cl_delta)) %>%
+    ggplot(aes(x = alpha_f, y = as.factor(m), fill = cl_delta)) +
+    geom_tile() +
+    facet_grid(degseq_type ~ space) +
+    scale_fill_gradient(low = "#ffffff", high = ALPHA_COLORS[2], name = "Me(SDA) - Me(SDC)")
+) %>%
+    add_base_theme +
+    theme(
+        legend.position = "top",
+        legend.title = element_text(size = 9),
+        legend.text = element_text(size = 7),
+        strip.text = element_text(size = 7),
+        axis.title = element_text(size = 9)
+    ) +
+    xlab("Homophily (α)") +
+    ylab("Number of dimensions (m)") +
+    ggtitle("Clustering")
+
+plt2 <- (df %>%
+    mutate(as_delta = if_else(cl_p_val > 0.01, 0, as_delta)) %>%
+    ggplot(aes(x = alpha_f, y = as.factor(m), fill = as_delta)) +
+    geom_tile() +
+    facet_grid(degseq_type ~ space) +
+    scale_fill_gradient(low = "#ffffff", high = ALPHA_COLORS[2], name = "Me(SDA) - Me(SDC)")
+) %>%
+    add_base_theme +
+    theme(
+        legend.position = "top",
+        legend.title = element_text(size = 9),
+        legend.text = element_text(size = 7),
+        strip.text = element_text(size = 7),
+        axis.title = element_text(size = 9),
+    ) +
+    xlab("Homophily (α)") +
+    ylab("Number of dimensions (m)") +
+    ggtitle("Degree assortativity")
+
+ggarrange(plt1, plt2, nrow = 1, ncol = 2, common.legend = TRUE, legend = "top")
+```
+
+## Statistical models
+
+### Statistical model for clustering
+
+```{r sdc_models_clustering}
+cl_cm_lm <- lm(logit(clustering) ~ space * degseq_type + log(N) + log(m) + log(alpha_n), data = sdc)
+summary(cl_cm_lm)
+cl_cm_emm <- emmeans(cl_cm_lm, ~space + degseq_type, type = "response")
+cl_cm_cnt <- contrast(cl_cm_emm, method = "pairwise", by = "degseq_type")
+
+sig_df <- tibble(
+    degseq_type = c(rep("Poisson", 2), rep("Negative binomial", 2), "Power-law"),
+    x = c(1.5, 2.5, 1.5, 2.5, 2.5),
+    y = c(.086, .093, .137, .14, .17),
+    label = c("< 0.001", "0.001", "< 0.001", "< 0.001", "0.045")
+)
+
+cl_cm_plt <- (cl_cm_emm %>%
+    tidy %>%
+    ggplot(aes(x = space, y = response, color = degseq_type, group = degseq_type)) +
+    geom_line(linetype = 2) +
+    geom_errorbar(aes(ymin = conf.low, ymax = conf.high), width = .25) +
+    geom_point(shape = 16, size = 2) +
+    geom_label(data = sig_df, aes(x = x, y = y, label = label, color = degseq_type), size = 3) +
+    geom_signif(
+        color = "black",
+        annotations = "< 0.001",
+        xmin = 1,
+        xmax = 3,
+        y_position = .05,
+        tip_length = c(-.1, -.2),
+        vjust = 4,
+        textsize = 3
+    ) +
+    scale_color_manual(values = ALPHA_COLORS, name = "Degree sequence") +
+    scale_y_continuous(limits = c(0, .2), breaks = c(0, .05, .1, .15, .2)) +
+    theme(
+        axis.text.x = element_text(size = 9),
+        legend.background = element_rect(fill = "white", color = "black"),
+        legend.position = c(.12, .1),
+        legend.title = element_text(size = 9, face = "bold"),
+        legend.text = element_text(size = 9)
+    )
+) %>%
+    add_base_theme +
+    xlab("") +
+    ylab("Clustering")
+```
+
+### Statistical model for degree assortativity
+
+```{r sdc_models_assortativity}
+as_cm_lm <- lm(atanh(assortativity) ~ space * degseq_type + log(N) + log(m) + log(alpha_n) + degseq_sort, data = sdc)
+summary(as_cm_lm)
+as_cm_emm <- emmeans(as_cm_lm, ~space + degseq_type)
+as_cm_cnt <- contrast(as_cm_emm, method = "pairwise", by = "degseq_type")
+
+sig_df <- tibble(
+    degseq_type = c(rep("Poisson", 2), rep("Negative binomial", 2), rep("Power-law", 2)),
+    x = c(1.5, 2.5, 1.5, 2.5, 1.5, 2.5),
+    y = c(.03, .03, .33, .29, .45, .4),
+    label = c("0.001", "0.008", "< 0.001", "< 0.001", "< 0.001", "< 0.001")
+)
+
+as_cm_plt <- (as_cm_emm %>%
+    tidy %>%
+    mutate_at(vars(estimate, conf.low, conf.high), tanh) %>%
+    ggplot(aes(x = space, y = estimate, color = degseq_type, group = degseq_type)) +
+    geom_line(linetype = 2) +
+    geom_errorbar(aes(ymin = conf.low, ymax = conf.high), width = .25) +
+    geom_point(shape = 16, size = 2) +
+    geom_label(data = sig_df, aes(x = x, y = y, label = label, color = degseq_type), size = 3) +
+    scale_color_manual(values = ALPHA_COLORS, name = "Degree sequence") +
+    scale_y_continuous(limits = c(0, .55), breaks = c(0, .1, .2, .3, .4, .5)) +
+    theme(
+        axis.text.x = element_text(size = 9),
+        legend.position = "none"
+    )
+) %>%
+    add_base_theme +
+    xlab("") +
+    ylab("Degree assortativity")
+```
+
+### Model based comparison of different types of social spaces
+
+```{r sdc_models_plot, fig.width = 8}
+ggarrange(cl_cm_plt, as_cm_plt, ncol = 2, common.legend = TRUE, legend = "top")
+```
