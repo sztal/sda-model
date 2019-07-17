@@ -7,3 +7,4 @@ numba==0.43.0
 networkx==2.3
 python_igraph==0.7.1.post6
 scikit_learn==0.21.2
+pyarrow==0.14.0

@@ -13,6 +13,8 @@ import _
 
 HERE = os.path.dirname(os.path.realpath(__file__))
 FIGS = os.path.join(HERE, 'figures')
+if not os.path.exists(FIGS):
+    os.makedirs(FIGS, exist_ok=True)
 
 DPI = 150
 FIGSIZE = (12, 12)
