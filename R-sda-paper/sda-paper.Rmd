@@ -45,6 +45,7 @@ library(broom)
 library(ggsignif)
 library(ggpubr)
 library(gridExtra)
+library(DescTools)
 
 
 # Setup ggplot aesthetics
@@ -88,7 +89,8 @@ sda <- read_feather(file.path(DATA, "sda-data.feather")) %>%
         density = k_avg / (N - 1),
         clustering_c = clustering - density,
         alpha_n = if_else(is.finite(alpha), alpha, 100)
-    )
+    ) %>%
+    mutate(deg_gini = map_dbl(degseq, Gini, unbiased = TRUE))
 ```
 
 ## Clustering
@@ -174,15 +176,15 @@ Q <- sda %>%
 small_world <- tapply(Q$L_cor, Q$p_rewire, summary)
 ```
 
-## Skewness
+## Gini coefficient
 
-```{r sda_skewness, fig.width = 8, fig.asp = .618}
+```{r sda_gini, fig.width = 8, fig.asp = .618}
 gdf <- sda %>%
     group_by(space, N, m_f, alpha_f) %>%
     summarize(
-        stat = mean(deg_skew),
-        lower = simple_boot(deg_skew, min),
-        upper = simple_boot(deg_skew, max),
+        stat = mean(deg_gini),
+        lower = simple_boot(deg_gini, min),
+        upper = simple_boot(deg_gini, max),
         n = n()
     ) %>%
     ungroup
@@ -190,26 +192,35 @@ gdf <- sda %>%
 gdf %>%
     make_line_plot(LEGEND_TL, hline = 0) +
     facet_grid(space ~ m_f) +
-    ylab("Degree distribution skewness")
+    ylab("Gini coefficient")
 ```
 
-## Kurtosis
+## Degree distributions
 
-```{r sda_kurtosis}
-gdf <- sda %>%
-    group_by(space, N, m_f, alpha_f) %>%
-    summarize(
-        stat = mean(deg_kurt),
-        lower = simple_boot(deg_kurt, min),
-        upper = simple_boot(deg_kurt, max),
-        n = n()
-    ) %>%
+```{r sda_deg_dists, fig.width = 8, fig.asp = .618}
+gdf <- sda %>% 
+    filter(N == 8000) %>%
+    group_by(space, N, m_f, alpha_f) %>% 
+    summarize(deg = list(reduce(degseq, c))) %>% 
+    unnest %>%
     ungroup
 
-gdf %>%
-    make_line_plot(LEGEND_TL, hline = 0) +
-    facet_grid(space ~ m_f) +
-    ylab("Degree distribution kurtosis")
+{ gdf %>%
+    ggplot(aes(x = deg, fill = alpha_f)) +
+    geom_density(alpha = .7) +
+    facet_grid(space ~ m_f, scales = "free_x") +
+    scale_fill_manual(values = ALPHA_COLORS, labels = ALPHA_LABELS) +
+    labs(x = "Node degree", y = "Probability density", fill = "α") +
+    theme(
+        axis.text.x = element_text(angle = 90, hjust = 1, vjust = .5),
+        legend.position = c(.835, .945),
+        legend.background = element_rect(fill = "white", color = "black"),
+        legend.text = element_text(size = 9, face = "bold"),
+        legend.title.align = .5,
+        legend.direction = "horizontal"
+    )
+} %>%
+    add_base_theme()
 ```
 
 ## Statistical models

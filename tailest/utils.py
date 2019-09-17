@@ -2,7 +2,7 @@
 import numpy as np
 
 
-def add_uniform_noise(data, p = 1):
+def add_uniform_noise(data, p=1):
     """Add uniform noise to a given dataset.
 
     Function to add uniform random noise to a given dataset.
